@@ -1,7 +1,18 @@
+use std::marker::PhantomData;
+
 use crate::{error::Message, sys, util};
 
 pub mod r#async;
 pub mod options;
+
+#[repr(transparent)]
+pub struct OutputFile<'s>(sys::OutputFile, PhantomData<&'s ()>);
+
+impl<'s> OutputFile<'s> {
+	pub fn contents(&self) -> &str {
+		unsafe { util::as_str_or_empty(self.0.contents, self.0.contents_len) }
+	}
+}
 
 pub struct BuildResult(*mut sys::BuildResult);
 
@@ -27,6 +38,10 @@ impl BuildResult {
 
 	pub fn warnings(&self) -> &[Message<'_>] {
 		unsafe { util::slice_from_raw_parts_or_empty(self.inner().warnings.cast_const().cast::<Message>(), self.inner().warnings_len) }
+	}
+
+	pub fn outputs(&self) -> &[OutputFile<'_>] {
+		unsafe { util::slice_from_raw_parts_or_empty(self.inner().output_files.cast_const().cast::<OutputFile>(), self.inner().output_files_len) }
 	}
 }
 
