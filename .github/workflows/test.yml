@@ -21,6 +21,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '^1.22.3'
+          cache-dependency-path: native/go.sum
       - uses: Swatinem/rust-cache@v1
       - name: Build bindings
         run: make
