@@ -12,7 +12,7 @@ fn main() {
 	if target_family == "windows" {
 		// println!("cargo:rustc-link-lib=static=win32rt_patch");
 		if target_env == "msvc" {
-			println!("cargo:rustc-link-lib=static=legacy_stdio_definitions");
+			println!("cargo:rustc-link-lib=legacy_stdio_definitions");
 		}
 	} else {
 		match &*target_os {
