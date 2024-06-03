@@ -6,9 +6,21 @@ fn main() {
 	println!("cargo:rustc-link-search={}", native_out_path.to_string_lossy());
 	println!("cargo:rustc-link-lib=static=zsb");
 
-	let target = env::var("CARGO_CFG_TARGET_FAMILY").unwrap();
-	if target == "windows" {
+	let target_family = env::var("CARGO_CFG_TARGET_FAMILY").unwrap();
+	let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+	let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+	if target_family == "windows" {
 		// println!("cargo:rustc-link-lib=static=win32rt_patch");
+		if target_env == "msvc" {
+			println!("cargo:rustc-link-lib=static=legacy_stdio_definitions");
+		}
+	} else {
+		match &*target_os {
+			"macos" | "tvos" | "ios" => {
+				println!("cargo:rustc-link-lib=framework=CoreFoundation");
+			}
+			_ => {}
+		}
 	}
 
 	#[cfg(feature = "bindgen")]
