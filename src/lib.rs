@@ -73,6 +73,17 @@ mod tests {
 		}
 	}
 
+	#[test]
+	fn test_bad() {
+		let context = Context::new(&BuildOptions::new().entry_point("test/not_exist.js", "out.js").bundle(true)).unwrap();
+
+		let res = context.build();
+		assert!(res.is_error());
+		let errors = res.errors();
+		assert_eq!(errors.len(), 1);
+		assert_eq!(errors[0].text(), "Could not resolve \"test/not_exist.js\"");
+	}
+
 	#[tokio::test]
 	async fn test_async() {
 		let Ok(ctx) = Context::new(
