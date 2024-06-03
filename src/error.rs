@@ -17,25 +17,25 @@ impl<'s> Location<'s> {
 	#[inline]
 	#[must_use]
 	pub fn file(&self) -> Option<&str> {
-		util::as_str_opt(self.inner().file, self.inner().file_len)
+		unsafe { util::as_str_opt(self.inner().file, self.inner().file_len) }
 	}
 
 	#[inline]
 	#[must_use]
 	pub fn namespace(&self) -> Option<&str> {
-		util::as_str_opt(self.inner().namespace, self.inner().namespace_len)
+		unsafe { util::as_str_opt(self.inner().namespace, self.inner().namespace_len) }
 	}
 
 	#[inline]
 	#[must_use]
 	pub fn line_text(&self) -> &str {
-		util::as_str_or_empty(self.inner().line_text, self.inner().line_text_len)
+		unsafe { util::as_str_or_empty(self.inner().line_text, self.inner().line_text_len) }
 	}
 
 	#[inline]
 	#[must_use]
 	pub fn suggestion(&self) -> Option<&str> {
-		util::as_str_opt(self.inner().suggestion, self.inner().suggestion_len)
+		unsafe { util::as_str_opt(self.inner().suggestion, self.inner().suggestion_len) }
 	}
 
 	#[inline]
@@ -60,7 +60,7 @@ pub struct Note<'s>(sys::Note, PhantomData<&'s ()>);
 
 impl<'s> Note<'s> {
 	pub fn text(&self) -> &str {
-		util::as_str_or_empty(self.0.text, self.0.text_len)
+		unsafe { util::as_str_or_empty(self.0.text, self.0.text_len) }
 	}
 
 	pub fn location(&self) -> Location {
@@ -73,15 +73,15 @@ pub struct Message<'s>(sys::Message, PhantomData<&'s ()>);
 
 impl<'s> Message<'s> {
 	pub fn id(&self) -> Option<&str> {
-		util::as_str_opt(self.0.id, self.0.id_len)
+		unsafe { util::as_str_opt(self.0.id, self.0.id_len) }
 	}
 
 	pub fn plugin_name(&self) -> Option<&str> {
-		util::as_str_opt(self.0.plugin_name, self.0.plugin_name_len)
+		unsafe { util::as_str_opt(self.0.plugin_name, self.0.plugin_name_len) }
 	}
 
 	pub fn text(&self) -> &str {
-		util::as_str_or_empty(self.0.text, self.0.text_len)
+		unsafe { util::as_str_or_empty(self.0.text, self.0.text_len) }
 	}
 
 	pub fn location(&self) -> Option<Location> {
