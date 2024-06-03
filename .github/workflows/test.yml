@@ -27,4 +27,4 @@ jobs:
         working-directory: native
       - name: Run tests
         run: |
-          cargo test
+          cargo test -- --nocapture --test-threads=1
