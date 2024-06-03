@@ -3,30 +3,31 @@ package main
 // #include "common.h"
 import "C"
 import (
-	esbuild "github.com/evanw/esbuild/pkg/api"
+	"runtime"
 	"unsafe"
+
+	esbuild "github.com/evanw/esbuild/pkg/api"
 )
 
-func serializeLocation(location *esbuild.Location) *C.struct_Location {
-	ptr := C.malloc(C.size_t(unsafe.Sizeof(C.struct_Location{})))
-	serialized := (*C.struct_Location)(ptr)
+func serializeLocation(location *esbuild.Location, pinner *runtime.Pinner) *C.struct_Location {
+	serialized := alloc(C.struct_Location{})
 	if len(location.File) != 0 {
-		serialized.file = C.CString(location.File)
+		serialized.file = pinnedString(location.File, pinner)
 		serialized.file_len = C.size_t(len(location.File))
 	}
 	if len(location.Namespace) != 0 {
-		serialized.namespace = C.CString(location.Namespace)
+		serialized.namespace = pinnedString(location.Namespace, pinner)
 		serialized.namespace_len = C.size_t(len(location.Namespace))
 	}
 	serialized.line = C.int64_t(location.Line)
 	serialized.column = C.int64_t(location.Column)
 	serialized.length = C.int64_t(location.Length)
 	if len(location.LineText) != 0 {
-		serialized.line_text = C.CString(location.LineText)
+		serialized.line_text = pinnedString(location.LineText, pinner)
 		serialized.line_text_len = C.size_t(len(location.LineText))
 	}
 	if len(location.Suggestion) != 0 {
-		serialized.suggestion = C.CString(location.Suggestion)
+		serialized.suggestion = pinnedString(location.Suggestion, pinner)
 		serialized.suggestion_len = C.size_t(len(location.Suggestion))
 	}
 	return serialized
@@ -53,21 +54,21 @@ func destroyLocation(location *C.struct_Location) {
 	if location == nil {
 		return
 	}
-	C.free(unsafe.Pointer(location.file))
-	C.free(unsafe.Pointer(location.namespace))
-	C.free(unsafe.Pointer(location.line_text))
-	C.free(unsafe.Pointer(location.suggestion))
-	C.free(unsafe.Pointer(location))
+	// free(location.file)
+	// free(location.namespace)
+	// free(location.line_text)
+	// free(location.suggestion)
+	free(location)
 }
 
-func serializeNote(note *esbuild.Note) C.struct_Note {
+func serializeNote(note *esbuild.Note, pinner *runtime.Pinner) C.struct_Note {
 	serialized := C.struct_Note{}
 	if len(note.Text) > 0 {
-		serialized.text = C.CString(note.Text)
+		serialized.text = pinnedString(note.Text, pinner)
 		serialized.text_len = C.size_t(len(note.Text))
 	}
 	if note.Location != nil {
-		serialized.location = serializeLocation(note.Location)
+		serialized.location = serializeLocation(note.Location, pinner)
 	}
 	return serialized
 }
@@ -85,36 +86,35 @@ func deserializeNote(note *C.struct_Note) esbuild.Note {
 }
 
 func destroyNote(note *C.struct_Note) {
-	C.free(unsafe.Pointer(note.text))
+	// free(note.text)
 	destroyLocation(note.location)
 }
 
-func serializeMessage(message *esbuild.Message) C.struct_Message {
+func serializeMessage(message *esbuild.Message, pinner *runtime.Pinner) C.struct_Message {
 	serialized := C.struct_Message{}
 	if len(message.ID) != 0 {
-		serialized.id = C.CString(message.ID)
+		serialized.id = pinnedString(message.ID, pinner)
 		serialized.id_len = C.size_t(len(message.ID))
 	}
 	if len(message.PluginName) != 0 {
-		serialized.plugin_name = C.CString(message.PluginName)
+		serialized.plugin_name = pinnedString(message.PluginName, pinner)
 		serialized.plugin_name_len = C.size_t(len(message.PluginName))
 	}
 	if len(message.Text) != 0 {
-		serialized.text = C.CString(message.Text)
+		serialized.text = pinnedString(message.Text, pinner)
 		serialized.text_len = C.size_t(len(message.Text))
 	}
 	if message.Location != nil {
-		serialized.location = serializeLocation(message.Location)
+		serialized.location = serializeLocation(message.Location, pinner)
 	}
 	numNotes := len(message.Notes)
 	serialized.notes_len = C.size_t(numNotes)
 	if serialized.notes_len > 0 {
-		notes := C.malloc(serialized.notes_len * C.size_t(unsafe.Sizeof(C.struct_Note{})))
-		notesArr := (*[1 << 28]C.struct_Note)(notes)[:numNotes:numNotes]
+		notes, notesPtr := allocSlice(serialized.notes_len, C.struct_Note{})
 		for i, note := range message.Notes {
-			notesArr[i] = serializeNote(&note)
+			notes[i] = serializeNote(&note, pinner)
 		}
-		serialized.notes = (*C.struct_Note)(notes)
+		serialized.notes = notesPtr
 	}
 	return serialized
 }
@@ -135,7 +135,7 @@ func deserializeMessage(message *C.struct_Message) esbuild.Message {
 		deserialized.Location = &location
 	}
 	if message.notes_len > 0 {
-		serializedNotes := (*[1 << 28]C.struct_Note)(unsafe.Pointer(message.notes))[:message.notes_len:message.notes_len]
+		serializedNotes := unsafe.Slice(message.notes, message.notes_len)
 		notesLen := int(message.notes_len)
 		notes := make([]esbuild.Note, notesLen)
 		for i := 0; i < notesLen; i++ {
@@ -146,29 +146,16 @@ func deserializeMessage(message *C.struct_Message) esbuild.Message {
 }
 
 func destroyMessage(message *C.struct_Message) {
-	C.free(unsafe.Pointer(message.id))
-	C.free(unsafe.Pointer(message.plugin_name))
-	C.free(unsafe.Pointer(message.text))
-	C.free(unsafe.Pointer(message.notes))
+	// free(message.id)
+	// free(message.plugin_name)
+	// free(message.text)
 	destroyLocation(message.location)
 	numNotes := int(message.notes_len)
 	if numNotes > 0 {
-		notesArr := (*[1 << 28]C.struct_Note)(unsafe.Pointer(message.notes))[:numNotes:numNotes]
+		notesArr := unsafe.Slice(message.notes, numNotes)
 		for i := 0; i < numNotes; i++ {
 			destroyNote(&notesArr[i])
 		}
-		C.free(unsafe.Pointer(message.notes))
-	}
-}
-
-//export Zsb_ContextResult_Destroy
-func Zsb_ContextResult_Destroy(res C.struct_ContextResult) {
-	numMessages := int(res.messages_len)
-	if numMessages > 0 {
-		messagesArr := (*[1 << 28]C.struct_Message)(unsafe.Pointer(res.messages))[:numMessages:numMessages]
-		for i := 0; i < numMessages; i++ {
-			destroyMessage(&messagesArr[i])
-		}
-		C.free(unsafe.Pointer(res.messages))
+		free(message.notes)
 	}
 }

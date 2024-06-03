@@ -38,7 +38,6 @@ pub struct Message {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ContextResult {
-	pub is_err: bool,
 	pub messages: *mut Message,
 	pub messages_len: usize
 }
@@ -82,10 +81,10 @@ pub type GoUint8 = ::std::os::raw::c_uchar;
 pub type GoUint16 = ::std::os::raw::c_ushort;
 pub type GoUint64 = ::std::os::raw::c_ulonglong;
 extern "C" {
-	pub fn Zsb_ContextResult_Destroy(res: ContextResult);
+	pub fn Zsb_Context_Create(optionsHandle: GoUint64, outHandle: *mut GoUint64) -> *mut ContextResult;
 }
 extern "C" {
-	pub fn Zsb_Context_Create(optionsHandle: GoUint64, outHandle: *mut GoUint64) -> ContextResult;
+	pub fn Zsb_ContextResult_Destroy(res: *mut ContextResult);
 }
 extern "C" {
 	pub fn Zsb_Context_Build(handle: GoUint64) -> *mut BuildResult;

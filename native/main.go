@@ -3,20 +3,24 @@ package main
 // #include "common.h"
 import "C"
 import (
-	esbuild "github.com/evanw/esbuild/pkg/api"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	esbuild "github.com/evanw/esbuild/pkg/api"
 )
 
 var (
 	// map[uint64]esbuild.BuildContext
-	contextHandles   = sync.Map{}
-	contextHandleAcc atomic.Uint64
+	contextHandles       = sync.Map{}
+	contextHandleAcc     atomic.Uint64
+	contextResultPinners = sync.Map{} // map[*C.struct_ContextResult]*runtime.Pinner
+	buildResultPinners   = sync.Map{} // map[*C.struct_BuildResult]*runtime.Pinner
 )
 
 //export Zsb_Context_Create
-func Zsb_Context_Create(optionsHandle uint64, outHandle *uint64) C.struct_ContextResult {
+func Zsb_Context_Create(optionsHandle uint64, outHandle *uint64) *C.struct_ContextResult {
 	v, ok := buildOptions.Load(optionsHandle)
 	if !ok {
 		panic("bad build options handle")
@@ -27,21 +31,40 @@ func Zsb_Context_Create(optionsHandle uint64, outHandle *uint64) C.struct_Contex
 	context, err := esbuild.Context(*options)
 	if err != nil {
 		numMessages := len(err.Errors)
-		result := C.struct_ContextResult{is_err: true}
+		result := alloc(C.struct_ContextResult{})
 		result.messages_len = C.size_t(numMessages)
+		pinner := new(runtime.Pinner)
+		buildResultPinners.Store(result, pinner)
 		if result.messages_len > 0 {
-			messages := C.malloc(result.messages_len * C.size_t(unsafe.Sizeof(C.struct_Message{})))
-			messagesArr := (*[1 << 28]C.struct_Message)(messages)[:numMessages:numMessages]
+			messagesSlice, messages := allocSlice(result.messages_len, C.struct_Message{})
 			for i, msg := range err.Errors {
-				messagesArr[i] = serializeMessage(&msg)
+				messagesSlice[i] = serializeMessage(&msg, pinner)
 			}
-			result.messages = (*C.struct_Message)(messages)
+			result.messages = messages
 		}
 		return result
 	}
 
 	contextHandles.Store(*outHandle, context)
-	return C.struct_ContextResult{is_err: false}
+	return nil
+}
+
+//export Zsb_ContextResult_Destroy
+func Zsb_ContextResult_Destroy(res *C.struct_ContextResult) {
+	v, ok := contextResultPinners.LoadAndDelete(res)
+	if !ok {
+		panic("bad context result addr")
+	}
+	v.(*runtime.Pinner).Unpin()
+
+	numMessages := int(res.messages_len)
+	if numMessages > 0 {
+		messagesArr := unsafe.Slice(res.messages, numMessages)
+		for i := 0; i < numMessages; i++ {
+			destroyMessage(&messagesArr[i])
+		}
+		free(res.messages)
+	}
 }
 
 //export Zsb_Context_Build
@@ -51,7 +74,10 @@ func Zsb_Context_Build(handle uint64) *C.struct_BuildResult {
 		panic("bad context handle")
 	}
 	goRes := v.(esbuild.BuildContext).Rebuild()
-	return serializeBuildResult(&goRes)
+	pinner := new(runtime.Pinner)
+	cRes := serializeBuildResult(&goRes, pinner)
+	buildResultPinners.Store(cRes, pinner)
+	return cRes
 }
 
 //export Zsb_Build
@@ -61,17 +87,26 @@ func Zsb_Build(optionsHandle uint64) *C.struct_BuildResult {
 		panic("bad build options handle")
 	}
 	goRes := esbuild.Build(*v.(*esbuild.BuildOptions))
-	return serializeBuildResult(&goRes)
+	pinner := new(runtime.Pinner)
+	cRes := serializeBuildResult(&goRes, pinner)
+	buildResultPinners.Store(cRes, pinner)
+	return cRes
 }
 
 func buildContextAsyncInner(ctx esbuild.BuildContext, callback C.BuildAsyncCallback, data unsafe.Pointer) {
 	res := ctx.Rebuild()
-	C.Zsb_BuildAsyncCallback_Dispatch(callback, serializeBuildResult(&res), data)
+	pinner := new(runtime.Pinner)
+	cRes := serializeBuildResult(&res, pinner)
+	buildResultPinners.Store(cRes, pinner)
+	C.Zsb_BuildAsyncCallback_Dispatch(callback, cRes, data)
 }
 
 func buildAsyncInner(options *esbuild.BuildOptions, callback C.BuildAsyncCallback, data unsafe.Pointer) {
 	res := esbuild.Build(*options)
-	C.Zsb_BuildAsyncCallback_Dispatch(callback, serializeBuildResult(&res), data)
+	pinner := new(runtime.Pinner)
+	cRes := serializeBuildResult(&res, pinner)
+	buildResultPinners.Store(cRes, pinner)
+	C.Zsb_BuildAsyncCallback_Dispatch(callback, cRes, data)
 }
 
 //export Zsb_Context_BuildAsync
@@ -93,52 +128,48 @@ func Zsb_BuildAsync(optionsHandle uint64, callback C.BuildAsyncCallback, data *C
 	go buildAsyncInner(v.(*esbuild.BuildOptions), callback, unsafe.Pointer(data))
 }
 
-func serializeOutputFile(file *esbuild.OutputFile) C.struct_OutputFile {
+func serializeOutputFile(file *esbuild.OutputFile, pinner *runtime.Pinner) C.struct_OutputFile {
 	out := C.struct_OutputFile{}
 	out.path_len = C.size_t(len(file.Path))
-	out.path = C.CString(file.Path)
+	out.path = pinnedString(file.Path, pinner)
 	out.hash_len = C.size_t(len(file.Hash))
-	out.hash = C.CString(file.Hash)
+	out.hash = pinnedString(file.Hash, pinner)
 	out.contents_len = C.size_t(len(file.Contents))
-	out.contents = (*C.char)(C.CBytes(file.Contents))
+	out.contents = (*C.char)(pinnedSlice(file.Contents, pinner))
 	return out
 }
 
-func serializeBuildResult(goRes *esbuild.BuildResult) *C.struct_BuildResult {
-	cResPtr := C.malloc(C.size_t(unsafe.Sizeof(C.struct_BuildResult{})))
-	cRes := (*C.struct_BuildResult)(cResPtr)
+func serializeBuildResult(goRes *esbuild.BuildResult, pinner *runtime.Pinner) *C.struct_BuildResult {
+	cRes := alloc(C.struct_BuildResult{})
 
 	numOutputFiles := len(goRes.OutputFiles)
 	cRes.output_files_len = C.size_t(numOutputFiles)
 	if cRes.output_files_len > 0 {
-		outputFiles := C.malloc(cRes.output_files_len * C.size_t(unsafe.Sizeof(C.struct_OutputFile{})))
-		outputFilesArr := (*[1 << 28]C.struct_OutputFile)(outputFiles)[:numOutputFiles:numOutputFiles]
+		outputFilesSlice, outputFiles := allocSlice(cRes.output_files_len, C.struct_OutputFile{})
 		for i, file := range goRes.OutputFiles {
-			outputFilesArr[i] = serializeOutputFile(&file)
+			outputFilesSlice[i] = serializeOutputFile(&file, pinner)
 		}
-		cRes.output_files = (*C.struct_OutputFile)(outputFiles)
+		cRes.output_files = outputFiles
 	}
 
 	numErrors := len(goRes.Errors)
 	cRes.errors_len = C.size_t(numErrors)
 	if cRes.errors_len > 0 {
-		errors := C.malloc(cRes.errors_len * C.size_t(unsafe.Sizeof(C.struct_Message{})))
-		errorsArr := (*[1 << 28]C.struct_Message)(errors)[:numErrors:numErrors]
+		errorsSlice, errors := allocSlice(cRes.errors_len, C.struct_Message{})
 		for i, msg := range goRes.Errors {
-			errorsArr[i] = serializeMessage(&msg)
+			errorsSlice[i] = serializeMessage(&msg, pinner)
 		}
-		cRes.errors = (*C.struct_Message)(errors)
+		cRes.errors = errors
 	}
 
 	numWarnings := len(goRes.Warnings)
 	cRes.warnings_len = C.size_t(numWarnings)
 	if cRes.warnings_len > 0 {
-		warnings := C.malloc(cRes.warnings_len * C.size_t(unsafe.Sizeof(C.struct_Message{})))
-		warningsArr := (*[1 << 28]C.struct_Message)(warnings)[:numWarnings:numWarnings]
+		warningsSlice, warnings := allocSlice(cRes.warnings_len, C.struct_Message{})
 		for i, msg := range goRes.Warnings {
-			warningsArr[i] = serializeMessage(&msg)
+			warningsSlice[i] = serializeMessage(&msg, pinner)
 		}
-		cRes.warnings = (*C.struct_Message)(warnings)
+		cRes.warnings = warnings
 	}
 
 	return cRes
@@ -148,35 +179,41 @@ func serializeBuildResult(goRes *esbuild.BuildResult) *C.struct_BuildResult {
 func Zsb_BuildResult_Destroy(c *C.struct_BuildResult) {
 	numErrors := int(c.errors_len)
 	if numErrors > 0 {
-		errorsArr := (*[1 << 28]C.struct_Message)(unsafe.Pointer(c.errors))[:numErrors:numErrors]
-		for i := 0; i < numErrors; i++ {
-			destroyMessage(&errorsArr[i])
+		errors := unsafe.Slice(c.errors, numErrors)
+		for _, err := range errors {
+			destroyMessage(&err)
 		}
-		C.free(unsafe.Pointer(c.errors))
+		free(c.errors)
 	}
 	numWarnings := int(c.warnings_len)
 	if numWarnings > 0 {
-		warningsArr := (*[1 << 28]C.struct_Message)(unsafe.Pointer(c.warnings))[:numWarnings:numWarnings]
-		for i := 0; i < numWarnings; i++ {
-			destroyMessage(&warningsArr[i])
+		warnings := unsafe.Slice(c.warnings, numWarnings)
+		for _, warning := range warnings {
+			destroyMessage(&warning)
 		}
-		C.free(unsafe.Pointer(c.warnings))
+		free(c.warnings)
 	}
 	numOutputFiles := int(c.output_files_len)
 	if numOutputFiles > 0 {
-		outputFilesArr := (*[1 << 28]C.struct_OutputFile)(unsafe.Pointer(c.output_files))[:numOutputFiles:numOutputFiles]
-		for i := 0; i < numOutputFiles; i++ {
-			destroyOutputFile(&outputFilesArr[i])
+		outputFiles := unsafe.Slice(c.output_files, numOutputFiles)
+		for _, outputFile := range outputFiles {
+			destroyOutputFile(&outputFile)
 		}
-		C.free(unsafe.Pointer(c.output_files))
+		free(c.output_files)
 	}
-	C.free(unsafe.Pointer(c))
+	free(c)
+
+	pinner, ok := buildResultPinners.LoadAndDelete(c)
+	if !ok {
+		panic("bad output file pinner addr")
+	}
+	pinner.(*runtime.Pinner).Unpin()
 }
 
 func destroyOutputFile(file *C.struct_OutputFile) {
-	C.free(unsafe.Pointer(file.path))
-	C.free(unsafe.Pointer(file.hash))
-	C.free(unsafe.Pointer(file.contents))
+	// C.free(unsafe.Pointer(file.path))
+	// C.free(unsafe.Pointer(file.hash))
+	// C.free(unsafe.Pointer(file.contents))
 }
 
 //export Zsb_Context_Cancel
@@ -190,12 +227,11 @@ func Zsb_Context_Cancel(handle uint64) {
 
 //export Zsb_Context_Destroy
 func Zsb_Context_Destroy(handle uint64) {
-	v, ok := contextHandles.Load(handle)
+	v, ok := contextHandles.LoadAndDelete(handle)
 	if !ok {
 		return
 	}
 	v.(esbuild.BuildContext).Dispose()
-	contextHandles.Delete(handle)
 }
 
 func main() {}

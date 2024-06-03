@@ -5,11 +5,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef struct Result {
-	bool is_err;
-	uint8_t *bytes;
-} Result;
-
 struct Location {
 	const char *file;
 	size_t file_len;
@@ -43,7 +38,6 @@ struct Message {
 };
 
 struct ContextResult {
-	bool is_err;
 	struct Message *messages;
 	size_t messages_len;
 };
