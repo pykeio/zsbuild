@@ -1,0 +1,24 @@
+[package]
+name = "zsbuild"
+version = "0.0.1"
+description = "esbuild, the extremely fast bundler for the web, now with 100% more crab"
+authors = [ "pyke.io <contact@pyke.io>" ]
+license = "MIT OR Apache-2.0"
+include = [ "src/", "native/", "LICENSE-APACHE", "LICENSE-MIT", "README.md" ]
+edition = "2021"
+rust-version = "1.70"
+
+[dependencies]
+tracing = { version = "0.1" }
+
+[dev-dependencies]
+tokio = { version = "1", features = [ "rt-multi-thread", "macros" ] }
+tracing-subscriber = { version = "0.3", features = [ "fmt", "env-filter" ] }
+tracing-test = "0.2"
+
+[build-dependencies]
+bindgen = { version = "0.69", optional = true }
+
+[features]
+default = []
+bindgen = ["dep:bindgen"]
