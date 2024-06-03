@@ -14,6 +14,20 @@ pub use self::{
 	plugin::{IntoPluginDescriptor, Plugin, PluginBuilder, PluginDescriptor}
 };
 
+#[cfg(all(target_family = "windows", target_arch = "x86_64", target_env = "msvc"))]
+#[link_section = ".CRT$XCU"]
+pub static _ZSB_GORUNTIME_INIT: unsafe extern "C" fn() = {
+	// Manually call Go runtime initialization.
+	// Go is supposed to place this in the `.ctors` section of the archive, which then invokes it whenever a new thread is
+	// constructed. However, somewhere along the way, MSVC/LLVM ignores the constructor, requiring us to manually initialize
+	// the runtime using MSVC's CRT equivalent of `.ctors`.
+	// ref: https://github.com/golang/go/issues/42190
+	extern "C" {
+		fn _rt0_amd64_windows_lib();
+	}
+	_rt0_amd64_windows_lib
+};
+
 #[cfg(test)]
 mod tests {
 	use std::sync::Arc;
