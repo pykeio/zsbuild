@@ -16,7 +16,7 @@ func serializeLocation(location *esbuild.Location, pinner *runtime.Pinner) *C.st
 		serialized.file_len = C.size_t(len(location.File))
 	}
 	if len(location.Namespace) != 0 {
-		serialized.namespace = pinnedString(location.Namespace, pinner)
+		serialized.namespace_ = pinnedString(location.Namespace, pinner)
 		serialized.namespace_len = C.size_t(len(location.Namespace))
 	}
 	serialized.line = C.int64_t(location.Line)
@@ -55,7 +55,7 @@ func destroyLocation(location *C.struct_Location) {
 		return
 	}
 	// free(location.file)
-	// free(location.namespace)
+	// free(location.namespace_)
 	// free(location.line_text)
 	// free(location.suggestion)
 	free(location)
@@ -141,6 +141,7 @@ func deserializeMessage(message *C.struct_Message) esbuild.Message {
 		for i := 0; i < notesLen; i++ {
 			notes[i] = deserializeNote(&serializedNotes[i])
 		}
+		deserialized.Notes = notes
 	}
 	return deserialized
 }

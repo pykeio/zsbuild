@@ -32,7 +32,11 @@ pub static _ZSB_GORUNTIME_INIT: unsafe extern "C" fn() = {
 mod tests {
 	use std::sync::Arc;
 
-	use super::*;
+	use super::{
+		error::{MessageBuilder, NoteBuilder},
+		plugin::OnStartResult,
+		*
+	};
 
 	pub struct TestPlugin {
 		pub the_number: Arc<usize>
@@ -52,7 +56,11 @@ mod tests {
 		fn build(&self, builder: &mut PluginBuilder) {
 			let num = Arc::clone(&self.the_number);
 			builder.on_start(move || {
-				println!("the number: {num}");
+				if *num != 42 {
+					OnStartResult::error(MessageBuilder::new("test error").with_note(NoteBuilder::new("test note")))
+				} else {
+					OnStartResult::ok()
+				}
 			})
 		}
 	}
@@ -71,6 +79,21 @@ mod tests {
 		if res.is_error() {
 			panic!("{}", &res.errors()[0]);
 		}
+	}
+
+	#[test]
+	fn test_plugin_on_start_error() {
+		let Ok(ctx) = Context::new(
+			&BuildOptions::new()
+				.entry_point("test/main.js", "out.js")
+				.plugin(TestPlugin::new(7216))
+				.bundle(true)
+		) else {
+			panic!("error creating context");
+		};
+		let res = ctx.build();
+		assert!(res.is_error());
+		assert_eq!(res.errors()[0].text(), "test error");
 	}
 
 	#[test]

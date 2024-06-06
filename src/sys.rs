@@ -5,7 +5,7 @@
 pub struct Location {
 	pub file: *const ::std::os::raw::c_char,
 	pub file_len: usize,
-	pub namespace: *const ::std::os::raw::c_char,
+	pub namespace_: *const ::std::os::raw::c_char,
 	pub namespace_len: usize,
 	pub line: i64,
 	pub column: i64,
@@ -73,9 +73,20 @@ pub type PluginDestructor = ::std::option::Option<unsafe extern "C" fn(data: *mu
 extern "C" {
 	pub fn Zsb_PluginDestructor_Dispatch(callback: PluginDestructor, data: *mut ::std::os::raw::c_void);
 }
-pub type PluginCallbackOnStart = ::std::option::Option<unsafe extern "C" fn(data: *mut ::std::os::raw::c_void)>;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct PluginOnStartResult {
+	pub errors: *mut Message,
+	pub errors_len: usize,
+	pub warnings: *mut Message,
+	pub warnings_len: usize
+}
 extern "C" {
-	pub fn Zsb_PluginCallbackOnStart_Dispatch(callback: PluginCallbackOnStart, data: *mut ::std::os::raw::c_void);
+	pub fn Zsb_PluginOnStartResult_Destroy(res: *mut PluginOnStartResult);
+}
+pub type PluginCallbackOnStart = ::std::option::Option<unsafe extern "C" fn(data: *mut ::std::os::raw::c_void) -> *mut PluginOnStartResult>;
+extern "C" {
+	pub fn Zsb_PluginCallbackOnStart_Dispatch(callback: PluginCallbackOnStart, data: *mut ::std::os::raw::c_void) -> *mut PluginOnStartResult;
 }
 pub type GoUint8 = ::std::os::raw::c_uchar;
 pub type GoUint16 = ::std::os::raw::c_ushort;

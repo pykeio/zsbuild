@@ -3,10 +3,11 @@ package main
 // #include "common.h"
 import "C"
 import (
-	esbuild "github.com/evanw/esbuild/pkg/api"
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	esbuild "github.com/evanw/esbuild/pkg/api"
 )
 
 type PluginDescriptor struct {
@@ -57,7 +58,32 @@ func Zsb_PluginBuilder_OnStart(handle uint64, cb C.PluginCallbackOnStart, data *
 	build := v.(PluginBuilder)
 	build.build.OnStart(func() (esbuild.OnStartResult, error) {
 		if !build.descriptor.destroyed {
-			C.Zsb_PluginCallbackOnStart_Dispatch(cb, unsafe.Pointer(data))
+			cRes := C.Zsb_PluginCallbackOnStart_Dispatch(cb, unsafe.Pointer(data))
+			if cRes == nil {
+				return esbuild.OnStartResult{}, nil
+			}
+
+			res := esbuild.OnStartResult{}
+			if cRes.errors_len > 0 {
+				serializedErrors := unsafe.Slice(cRes.errors, cRes.errors_len)
+				errorsLen := int(cRes.errors_len)
+				errors := make([]esbuild.Message, errorsLen)
+				for i := 0; i < errorsLen; i++ {
+					errors[i] = deserializeMessage(&serializedErrors[i])
+				}
+				res.Errors = errors
+			}
+			if cRes.warnings_len > 0 {
+				serializedWarnings := unsafe.Slice(cRes.warnings, cRes.warnings_len)
+				warningsLen := int(cRes.warnings_len)
+				warnings := make([]esbuild.Message, warningsLen)
+				for i := 0; i < warningsLen; i++ {
+					warnings[i] = deserializeMessage(&serializedWarnings[i])
+				}
+				res.Warnings = warnings
+			}
+			C.Zsb_PluginOnStartResult_Destroy(cRes)
+			return res, nil
 		}
 		return esbuild.OnStartResult{}, nil
 	})
@@ -74,14 +100,12 @@ func Zsb_Plugin_Create(name *C.char, nameLen C.size_t, callback C.PluginBuildCal
 
 //export Zsb_Plugin_Destroy
 func Zsb_Plugin_Destroy(handle uint64) {
-	v, ok := pluginDescriptorHandles.Load(handle)
+	_, ok := pluginDescriptorHandles.LoadAndDelete(handle)
 	if !ok {
 		panic("bad plugin descriptor handle")
 	}
-	builder := v.(PluginDescriptor)
-	if !builder.destroyed {
-		C.Zsb_PluginDestructor_Dispatch(builder.destructor, unsafe.Pointer(builder.data))
-		builder.destroyed = true
-	}
-	pluginDescriptorHandles.Delete(handle)
+
+	// In this function, we will simply remove the descriptor from the global map so it can be GC'd on the Go side once
+	// it is disposed. The `OnDispose()` callback we register will handle cleaning up the Rust side when the plugin is
+	// truly no longer in use.
 }

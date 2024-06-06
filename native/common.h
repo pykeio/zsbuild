@@ -8,7 +8,7 @@
 struct Location {
 	const char *file;
 	size_t file_len;
-	const char *namespace;
+	const char *namespace_;
 	size_t namespace_len;
 	int64_t line;
 	int64_t column;
@@ -68,7 +68,15 @@ void Zsb_PluginBuildCallback_Dispatch(PluginBuildCallback callback, uint64_t han
 typedef void (*PluginDestructor)(void *data);
 void Zsb_PluginDestructor_Dispatch(PluginDestructor callback, void *data);
 
-typedef void (*PluginCallbackOnStart)(void *data);
-void Zsb_PluginCallbackOnStart_Dispatch(PluginCallbackOnStart callback, void *data);
+struct PluginOnStartResult {
+	struct Message *errors;
+	size_t errors_len;
+	struct Message *warnings;
+	size_t warnings_len;
+};
+void Zsb_PluginOnStartResult_Destroy(struct PluginOnStartResult *res);
+
+typedef struct PluginOnStartResult *(*PluginCallbackOnStart)(void *data);
+struct PluginOnStartResult *Zsb_PluginCallbackOnStart_Dispatch(PluginCallbackOnStart callback, void *data);
 
 #endif

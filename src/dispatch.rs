@@ -18,6 +18,11 @@ pub unsafe extern "C" fn Zsb_PluginDestructor_Dispatch(callback: sys::PluginDest
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Zsb_PluginCallbackOnStart_Dispatch(callback: sys::PluginCallbackOnStart, data: *mut c_void) {
+pub unsafe extern "C" fn Zsb_PluginCallbackOnStart_Dispatch(callback: sys::PluginCallbackOnStart, data: *mut c_void) -> *mut sys::PluginOnStartResult {
 	callback.unwrap()(data)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Zsb_PluginOnStartResult_Destroy(res: *mut sys::PluginOnStartResult) {
+	crate::plugin::OnStartResult::consume(res)
 }
