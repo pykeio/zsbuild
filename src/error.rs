@@ -1,10 +1,13 @@
 use std::{
 	fmt::{Display, Formatter},
 	marker::PhantomData,
-	ptr, slice
+	ptr
 };
 
-use crate::{sys, util};
+use crate::{
+	sys,
+	util::{self, IntoFFI}
+};
 
 #[repr(transparent)]
 pub struct Location<'s>(*mut sys::Location, PhantomData<&'s ()>);
@@ -157,8 +160,12 @@ impl LocationBuilder {
 		self.suggestion = Some(suggestion.to_string());
 		self
 	}
+}
 
-	pub(crate) fn serialize(self) -> *mut sys::Location {
+impl IntoFFI for LocationBuilder {
+	type FFIType = *mut sys::Location;
+
+	fn into_ffi(self) -> Self::FFIType {
 		let mut location = sys::Location {
 			line: self.line,
 			column: self.column,
@@ -172,35 +179,30 @@ impl LocationBuilder {
 			suggestion: ptr::null_mut(),
 			suggestion_len: 0
 		};
-		let file = self.file.into_boxed_str();
-		// SAFETY: casting a `*mut str` to `*mut i8` rightfully seems psychopathic, but remember that Box<[T]> (which
-		// Box<str> basically is) is actually a "fat" pointer. Only the data of the slice (in this case the string data)
-		// is being pointed to; the length is actually stored *alongside* the pointer (`size_of::<Box<[T]>>() == 16`)
-		// instead of being directed to by it.  Thus, it's okay to cast the raw pointer to the slice's element type.
-		(location.file_len, location.file) = (file.len(), Box::into_raw(file).cast::<i8>().cast_const());
-		if let Some(namespace) = self.namespace.map(String::into_boxed_str) {
-			(location.namespace_len, location.namespace_) = (namespace.len(), Box::into_raw(namespace).cast::<i8>().cast_const());
+		(location.file_len, location.file) = util::decompose_string(self.file);
+		if let Some(namespace) = self.namespace {
+			(location.namespace_len, location.namespace_) = util::decompose_string(namespace);
 		}
-		if let Some(line_text) = self.line_text.map(String::into_boxed_str) {
-			(location.line_text_len, location.line_text) = (line_text.len(), Box::into_raw(line_text).cast::<i8>().cast_const());
+		if let Some(line_text) = self.line_text {
+			(location.line_text_len, location.line_text) = util::decompose_string(line_text);
 		}
-		if let Some(suggestion) = self.suggestion.map(String::into_boxed_str) {
-			(location.suggestion_len, location.suggestion) = (suggestion.len(), Box::into_raw(suggestion).cast::<i8>().cast_const());
+		if let Some(suggestion) = self.suggestion {
+			(location.suggestion_len, location.suggestion) = util::decompose_string(suggestion);
 		}
 		Box::into_raw(Box::new(location))
 	}
 
-	pub(crate) unsafe fn consume(location: *mut sys::Location) {
+	unsafe fn drop_ffi(location: Self::FFIType) {
 		let location = &mut *location;
-		drop(Box::from_raw(slice::from_raw_parts_mut(location.file.cast_mut(), location.file_len)));
+		util::drop_decomposed_string(location.file, location.file_len);
 		if !location.namespace_.is_null() {
-			drop(Box::from_raw(slice::from_raw_parts_mut(location.namespace_.cast_mut(), location.namespace_len)));
+			util::drop_decomposed_string(location.namespace_, location.namespace_len);
 		}
 		if !location.line_text.is_null() {
-			drop(Box::from_raw(slice::from_raw_parts_mut(location.line_text.cast_mut(), location.line_text_len)));
+			util::drop_decomposed_string(location.line_text, location.line_text_len);
 		}
 		if !location.suggestion.is_null() {
-			drop(Box::from_raw(slice::from_raw_parts_mut(location.suggestion.cast_mut(), location.suggestion_len)));
+			util::drop_decomposed_string(location.suggestion, location.suggestion_len);
 		}
 		drop(Box::from_raw(location as *mut sys::Location));
 	}
@@ -224,20 +226,24 @@ impl NoteBuilder {
 		self.location = Some(location);
 		self
 	}
+}
 
-	pub(crate) fn serialize(self) -> sys::Note {
+impl IntoFFI for NoteBuilder {
+	type FFIType = sys::Note;
+
+	fn into_ffi(self) -> Self::FFIType {
 		let text = self.text.into_boxed_str();
 		sys::Note {
 			text_len: text.len(),
 			text: Box::into_raw(text).cast::<i8>().cast_const(),
-			location: self.location.map(LocationBuilder::serialize).unwrap_or_else(ptr::null_mut)
+			location: self.location.map(LocationBuilder::into_ffi).unwrap_or_else(ptr::null_mut)
 		}
 	}
 
-	pub(crate) unsafe fn consume(note: sys::Note) {
-		drop(Box::from_raw(slice::from_raw_parts_mut(note.text.cast_mut(), note.text_len)));
+	unsafe fn drop_ffi(note: Self::FFIType) {
+		util::drop_decomposed_string(note.text, note.text_len);
 		if !note.location.is_null() {
-			LocationBuilder::consume(note.location);
+			LocationBuilder::drop_ffi(note.location);
 		}
 	}
 }
@@ -264,11 +270,25 @@ impl MessageBuilder {
 		self
 	}
 
-	pub(crate) fn serialize(self) -> sys::Message {
+	pub fn with_id(mut self, id: impl ToString) -> Self {
+		self.id = Some(id.to_string());
+		self
+	}
+
+	pub fn with_plugin_name(mut self, plugin: impl ToString) -> Self {
+		self.plugin_name = Some(plugin.to_string());
+		self
+	}
+}
+
+impl IntoFFI for MessageBuilder {
+	type FFIType = sys::Message;
+
+	fn into_ffi(self) -> Self::FFIType {
 		let mut message = sys::Message {
 			id: ptr::null(),
 			id_len: 0,
-			location: self.location.map(LocationBuilder::serialize).unwrap_or_else(ptr::null_mut),
+			location: self.location.map(LocationBuilder::into_ffi).unwrap_or_else(ptr::null_mut),
 			notes: ptr::null_mut(),
 			notes_len: 0,
 			plugin_name: ptr::null(),
@@ -276,21 +296,18 @@ impl MessageBuilder {
 			text: ptr::null(),
 			text_len: 0
 		};
-		let text = self.text.into_boxed_str();
-		(message.text_len, message.text) = (text.len(), Box::into_raw(text).cast::<i8>().cast_const());
+		(message.text_len, message.text) = util::decompose_string(self.text);
 		if !self.notes.is_empty() {
-			let notes = self.notes.into_iter().map(NoteBuilder::serialize).collect::<Vec<_>>().into_boxed_slice();
-			(message.notes_len, message.notes) = (notes.len(), Box::into_raw(notes).cast::<sys::Note>());
+			(message.notes_len, message.notes) = util::decompose_vec(self.notes.into_iter().map(NoteBuilder::into_ffi).collect());
 		}
 		message
 	}
 
-	pub(crate) unsafe fn consume(message: sys::Message) {
-		drop(Box::from_raw(slice::from_raw_parts_mut(message.text.cast_mut(), message.text_len)));
+	unsafe fn drop_ffi(message: Self::FFIType) {
+		util::drop_decomposed_string(message.text, message.text_len);
 		if message.notes_len > 0 {
-			let notes = Box::from_raw(slice::from_raw_parts_mut(message.notes, message.notes_len));
-			for note in notes.into_vec() {
-				NoteBuilder::consume(note);
+			for note in util::recompose_vec(message.notes, message.notes_len) {
+				NoteBuilder::drop_ffi(note);
 			}
 		}
 	}

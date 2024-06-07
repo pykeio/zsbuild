@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use crate::sys;
+use crate::{sys, util::IntoFFI};
 
 #[no_mangle]
 pub unsafe extern "C" fn Zsb_BuildAsyncCallback_Dispatch(callback: sys::BuildAsyncCallback, result: *mut sys::BuildResult, data: *mut c_void) {
@@ -24,5 +24,5 @@ pub unsafe extern "C" fn Zsb_PluginCallbackOnStart_Dispatch(callback: sys::Plugi
 
 #[no_mangle]
 pub unsafe extern "C" fn Zsb_PluginOnStartResult_Destroy(res: *mut sys::PluginOnStartResult) {
-	crate::plugin::OnStartResult::consume(res)
+	crate::plugin::OnStartResult::drop_ffi(res)
 }

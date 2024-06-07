@@ -2,7 +2,7 @@ use std::{ffi::c_void, ptr, slice};
 
 use tracing::Level;
 
-use crate::{error::MessageBuilder, sys};
+use crate::{error::MessageBuilder, sys, util::IntoFFI};
 
 pub trait OnStartCallback: FnMut() -> OnStartResult + Send + Sync + 'static {}
 impl<F: FnMut() -> OnStartResult + Send + Sync + 'static> OnStartCallback for F {}
@@ -55,8 +55,12 @@ impl OnStartResult {
 		self.warnings.push(message);
 		self
 	}
+}
 
-	pub(crate) fn serialize(self) -> *mut sys::PluginOnStartResult {
+impl IntoFFI for OnStartResult {
+	type FFIType = *mut sys::PluginOnStartResult;
+
+	fn into_ffi(self) -> Self::FFIType {
 		let mut res = sys::PluginOnStartResult {
 			errors: ptr::null_mut(),
 			errors_len: 0,
@@ -64,28 +68,28 @@ impl OnStartResult {
 			warnings_len: 0
 		};
 		if !self.errors.is_empty() {
-			let errors = self.errors.into_iter().map(|c| c.serialize()).collect::<Vec<_>>().into_boxed_slice();
+			let errors = self.errors.into_iter().map(|c| c.into_ffi()).collect::<Vec<_>>().into_boxed_slice();
 			(res.errors_len, res.errors) = (errors.len(), Box::into_raw(errors).cast::<sys::Message>());
 		}
 		if !self.warnings.is_empty() {
-			let warnings = self.warnings.into_iter().map(|c| c.serialize()).collect::<Vec<_>>().into_boxed_slice();
+			let warnings = self.warnings.into_iter().map(|c| c.into_ffi()).collect::<Vec<_>>().into_boxed_slice();
 			(res.warnings_len, res.warnings) = (warnings.len(), Box::into_raw(warnings).cast::<sys::Message>());
 		}
 		Box::into_raw(Box::new(res))
 	}
 
-	pub(crate) unsafe fn consume(res: *mut sys::PluginOnStartResult) {
+	unsafe fn drop_ffi(res: Self::FFIType) {
 		let res = &mut *res;
 		if res.errors_len > 0 {
 			let errors = Box::from_raw(slice::from_raw_parts_mut(res.errors, res.errors_len));
 			for message in errors.into_vec() {
-				MessageBuilder::consume(message);
+				MessageBuilder::drop_ffi(message);
 			}
 		}
 		if res.warnings_len > 0 {
 			let warnings = Box::from_raw(slice::from_raw_parts_mut(res.warnings, res.warnings_len));
 			for message in warnings.into_vec() {
-				MessageBuilder::consume(message);
+				MessageBuilder::drop_ffi(message);
 			}
 		}
 		drop(Box::from_raw(res))
@@ -106,8 +110,7 @@ impl<'d> PluginBuilder<'d> {
 	}
 
 	extern "C" fn on_start_cb(callback: *mut c_void) -> *mut sys::PluginOnStartResult {
-		let result = unsafe { (*callback.cast::<Box<dyn OnStartCallback>>())() };
-		result.serialize()
+		unsafe { (*callback.cast::<Box<dyn OnStartCallback>>())() }.into_ffi()
 	}
 }
 
