@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, slice, str::Utf8Error};
 
 use crate::{error::Message, sys, util};
 
@@ -9,8 +9,16 @@ pub mod options;
 pub struct OutputFile<'s>(sys::OutputFile, PhantomData<&'s ()>);
 
 impl<'s> OutputFile<'s> {
-	pub fn contents(&self) -> &str {
-		unsafe { util::as_str_or_empty(self.0.contents, self.0.contents_len) }
+	pub fn contents(&self) -> &[u8] {
+		unsafe { slice::from_raw_parts(self.0.contents.cast(), self.0.contents_len) }
+	}
+
+	pub fn contents_str(&self) -> Result<&str, Utf8Error> {
+		std::str::from_utf8(
+			(!self.0.contents.is_null())
+				.then(|| unsafe { slice::from_raw_parts(self.0.contents.cast::<u8>(), self.0.contents_len) })
+				.unwrap_or(&[])
+		)
 	}
 }
 
